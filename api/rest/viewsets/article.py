@@ -105,6 +105,11 @@ class ArticleSerializer(AmCATModelSerializer):
 
         Article.create_articles(self.object, self.context['view'].articleset)
 
+        for a in self.object:
+            a.created = not hasattr(a, 'duplicate_of')
+            if not a.id:
+                a.id = getattr(a, 'duplicate_of', None)
+                
         # make sure that self.many is True for serializing result
         self.many = True
         return self.object
