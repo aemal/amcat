@@ -17,34 +17,34 @@
 # License along with AmCAT.  If not, see <http://www.gnu.org/licenses/>.  #
 ###########################################################################
 
+"""
+Model module containing the Article class representing documents in the
+articles database table.
+"""
+
 from __future__ import unicode_literals, print_function, absolute_import
 
-from amcat.models.article import *
-from amcat.models.authorisation import *
-from amcat.models.language import *
-from amcat.models.medium import *
-from amcat.models.articleset import *
-from amcat.models.user import *
-from amcat.models.project import *
-from amcat.models.sentence import *
-from amcat.models.amcat import *
-from amcat.models.task import *
-from amcat.models.interaction import *
+from amcat.tools.model import AmcatModel
+from amcat.models.article import Article
 
-from amcat.models.plugin import *
+from django.db import models
 
-from amcat.models.coding.codedarticle import *
-from amcat.models.coding.codingschema import *
-from amcat.models.coding.codingschemafield import *
-from amcat.models.coding.codingjob import *
-from amcat.models.coding.coding import *
-from amcat.models.coding.code import *
-from amcat.models.coding.codebook import *
-from amcat.models.coding.codedarticle import *
-from amcat.models.coding.codingrule import *
-
-from amcat.models.scraper import *
+import logging
+log = logging.getLogger(__name__)
 
 
+class Interaction(AmcatModel):
+    """
+    Class representing a newspaper article
+    """
+    id = models.AutoField(primary_key=True)
 
-from amcat.models.rule import *
+    article = models.ForeignKey(Article, db_index=True)
+    author = models.CharField(max_length=100, db_index=True)
+    interaction = models.CharField(max_length=100, db_index=True)
+
+
+    class Meta():
+        db_table = 'articles_interactions'
+        app_label = 'amcat'
+    

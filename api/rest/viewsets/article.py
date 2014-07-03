@@ -17,12 +17,12 @@
 # License along with AmCAT.  If not, see <http://www.gnu.org/licenses/>.  #
 ###########################################################################
 import json
-from amcat.models import Medium, Article
+from amcat.models import Medium, Article, Interaction
 from api.rest.mixins import DatatablesMixin
 from api.rest.serializer import AmCATModelSerializer
 from api.rest.viewset import AmCATViewSetMixin
 
-__all__ = ("ArticleSerializer", "ArticleViewSet")
+__all__ = ("ArticleSerializer", "ArticleViewSet", "InteractionViewSet")
 
 class ArticleViewSetMixin(AmCATViewSetMixin):
     model_key = "article"
@@ -160,6 +160,29 @@ class ArticleViewSet(ProjectViewSetMixin, ArticleSetViewSetMixin, ArticleViewSet
         return queryset.filter(articlesets_set=self.articleset)
         return self.object
 
+class InteractionSerializer(AmCATModelSerializer):
+    model = Interaction
+
+    def restore_fields(self, data, files):
+        data = data.copy() # make data mutable
+        if 'article' not in data:
+            data['article'] = self.context['view'].article.id
+        return super(InteractionSerializer, self).restore_fields(data, files)
+
+        
+class InteractionViewSetMixin(AmCATViewSetMixin):
+    model = Interaction
+    model_key = "interaction"
+    
+class InteractionViewSet(ProjectViewSetMixin, ArticleSetViewSetMixin, ArticleViewSetMixin, InteractionViewSetMixin, DatatablesMixin, ModelViewSet):
+    model = Interaction
+    model_key = "interaction"
+    model_serializer_class = InteractionSerializer
+
+    def filter_queryset(self, queryset):
+        qs = super(InteractionViewSet, self).filter_queryset(queryset)
+        return qs.filter(article=self.article)
+    
 ###########################################################################
 #                          U N I T   T E S T S                            #
 ###########################################################################
@@ -216,3 +239,4 @@ class TestArticleViewSet(ApiTestCase):
         headlines = {a['headline'] : a for a in res}
         self.assertEqual(set(headlines), {'Test parent', 'Test child'})
         self.assertEqual(headlines['Test child']['parent'], headlines['Test parent']['id'])
+        
