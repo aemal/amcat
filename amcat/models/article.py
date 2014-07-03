@@ -79,7 +79,7 @@ class Article(AmcatModel):
     length = models.IntegerField(blank=True)
     metastring = models.TextField(null=True, blank=True)
     url = models.TextField(null=True, blank=True, db_index=True, max_length=750)
-    externalid = models.IntegerField(blank=True, null=True)
+    externalid = models.TextField(blank=True, null=True)
     author = models.TextField(blank=True, null=True, max_length=100)
     addressee = models.TextField(blank=True, null=True, max_length=100)
     uuid = PostgresNativeUUIDField(db_index=True, unique=True)
