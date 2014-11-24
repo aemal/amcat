@@ -35,3 +35,4 @@ six==1.7.3
 Unidecode==0.04.16
 urllib3==1.9
 wsgiref==0.1.2
+pyRserve==0.8.1
