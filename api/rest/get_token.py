@@ -1,5 +1,5 @@
 
-        
+
 from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework import parsers
@@ -31,7 +31,12 @@ class AuthTokenSerializer(serializers.Serializer):
         else:
             raise serializers.ValidationError('Must include "username" and "password"')
 
-
+def get_token(user):
+    token, created = Token.objects.get_or_create(user=user)
+    if not created:
+        token.created =datetime.datetime.now()
+        token.save()
+    return token
 
 class ObtainAuthToken(APIView):
     throttle_classes = ()
@@ -43,12 +48,9 @@ class ObtainAuthToken(APIView):
 
     def post(self, request):
         serializer = self.serializer_class(data=request.DATA)
-        if serializer.is_valid():
-            token, created = Token.objects.get_or_create(user=serializer.object['user'])
-            if not created:
-                token.created =datetime.datetime.now()
-                token.save()
 
+        if serializer.is_valid():
+            token = get_token(serializer.object['user'])
             return Response({'token': token.key})
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
