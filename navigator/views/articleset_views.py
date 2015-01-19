@@ -16,15 +16,18 @@
 # You should have received a copy of the GNU Affero General Public        #
 # License along with AmCAT.  If not, see <http://www.gnu.org/licenses/>.  #
 ###########################################################################
+from django import forms
+from django.core.exceptions import PermissionDenied
 
 import json
 import datetime
 
 from django.core.urlresolvers import reverse
 from django.db.models import Q
+from amcat.tools.amcates import ES
 from api.rest.resources import PluginResource
 
-from amcat.models import Plugin
+from amcat.models import Plugin, Article
 from amcat.models.project import LITTER_PROJECT_ID
 
 from amcat.scripts.actions.sample_articleset import SampleSet
@@ -45,6 +48,7 @@ UPLOAD_PLUGIN_TYPE = 1
 
 from django.utils.safestring import SafeText
 from django.template.defaultfilters import escape
+from django.http import HttpResponseBadRequest, HttpResponse
 
 
 class ArticleSetListView(HierarchicalViewMixin,ProjectViewMixin, BreadCrumbMixin, DatatableMixin, ListView):
@@ -83,10 +87,11 @@ class ArticleSetListView(HierarchicalViewMixin,ProjectViewMixin, BreadCrumbMixin
 
     def get_context_data(self, **kwargs):
         context = super(ArticleSetListView, self).get_context_data(**kwargs)
-        tables = [("favourite", '<i class="icon-star"></i> <b>Favourites</b>'),
-                  ("archived", "Archived Sets"),
-                  ("codingjob", "Coding Job Sets"),
-                  ]
+        tables = [
+            ("favourite", '<i class="icon-star"></i> <b>Favourites</b>'),
+            ("archived", "Archived Sets"),
+            ("codingjob", "Coding Job Sets"),
+        ]
         what = self.what
         if not ArticleSet.objects.filter(Q(projects_set=self.project)
                                          | Q(project=self.project)).exists():
@@ -121,13 +126,73 @@ class ArticleSetListView(HierarchicalViewMixin,ProjectViewMixin, BreadCrumbMixin
         return table
 
     def get_datatable_kwargs(self):
-        return {"url_kwargs": {"project" : self.project.id}}
+        return {
+            "url_kwargs": {"project": self.project.id},
+            "checkboxes": True
+        }
+
+
+class ArticleSetArticleDeleteForm(forms.Form):
+    articles = forms.ModelMultipleChoiceField(queryset=Article.objects.none())
+
+    def __init__(self, articleset, *args, **kwargs):
+        super(ArticleSetArticleDeleteForm, self).__init__(*args, **kwargs)
+        self.fields['articles'].queryset = articleset.articles.only("id").all()
+        self.articleset = articleset
+
+    def save(self):
+        self.articleset.remove_articles(self.cleaned_data["articles"])
+
+
+class AddArticlesToArticleSetForm(forms.Form):
+    articlesets = forms.ModelMultipleChoiceField(queryset=ArticleSet.objects.none())
+    articles = forms.ModelMultipleChoiceField(queryset=Article.objects.none())
+
+    def __init__(self, project, articleset, *args, **kwargs):
+        super(AddArticlesToArticleSetForm, self).__init__(*args, **kwargs)
+        self.fields["articlesets"].queryset = project.articlesets_set.only("id").all()
+        self.fields["articles"].queryset = articleset.articles.only("id").all()
+
+    def save(self):
+        for aset in self.cleaned_data["articlesets"]:
+            aset.add_articles(self.cleaned_data["articles"])
 
 class ArticleSetDetailsView(HierarchicalViewMixin, ProjectViewMixin, BreadCrumbMixin, DatatableMixin, DetailView):
     parent = ArticleSetListView
     resource = SearchResource
     rowlink = './{id}'
     model = ArticleSet
+
+    def delete(self, request, project_id, articleset_id):
+        """Accepts a list of article ids as post argument (articles)."""
+        if not self.can_edit():
+            raise PermissionDenied("You can't edit this articleset.")
+
+        articleset = ArticleSet.objects.get(id=articleset_id, project__id=project_id)
+        form = ArticleSetArticleDeleteForm(articleset=articleset, data=request.POST)
+
+        if form.is_valid():
+            form.save()
+            ES().flush()
+            return HttpResponse("OK", status=200)
+
+        return HttpResponseBadRequest(str(dict(form.errors)))
+
+    def post(self, request, project_id, articleset_id):
+        if not self.can_edit():
+            raise PermissionDenied("You can't edit this articleset.")
+
+        articleset = ArticleSet.objects.get(id=articleset_id, project__id=project_id)
+        form = AddArticlesToArticleSetForm(project=self.project, articleset=articleset, data=request.POST)
+
+        if form.is_valid():
+            form.save()
+            return HttpResponse("OK", status=200)
+
+        return HttpResponseBadRequest(str(dict(form.errors)))
+
+    def get_datatable_kwargs(self):
+        return {"checkboxes": True}
 
     def filter_table(self, table):
         return table.filter(sets=self.object.id)
@@ -190,7 +255,7 @@ class ArticleSetEditView(ProjectEditView):
     parent = ArticleSetDetailsView
     fields = ['project', 'name', 'provenance']
 
-class ArticleSetUploadListView(HierarchicalViewMixin,ProjectViewMixin, BreadCrumbMixin, DatatableMixin, ListView):
+class ArticleSetUploadListView(HierarchicalViewMixin, ProjectViewMixin, BreadCrumbMixin, DatatableMixin, ListView):
     parent = ArticleSetListView
     model = Plugin
     resource = PluginResource
@@ -203,8 +268,28 @@ class ArticleSetUploadListView(HierarchicalViewMixin,ProjectViewMixin, BreadCrum
 
 class ArticleSetRedirectHandler(ScriptHandler):
     def get_redirect(self):
-        setid = self.task._get_raw_result()
-        return reverse("article set-details", args=[self.task.project.id, setid]), "View Set"
+        aset_ids = self.task._get_raw_result()
+
+        if len(aset_ids) == 1:
+            return reverse("article set-details", args=[self.task.project.id, aset_ids[0]]), "View set"
+
+        # Multiple articlesets
+        url = reverse("article set-multiple", args=[self.task.project.id])
+        return url + "?set=" + "&set=".join(map(str, aset_ids)), "View sets"
+
+class MultipleArticleSetDestinationView(HierarchicalViewMixin, ProjectViewMixin, BreadCrumbMixin, DatatableMixin, ListView):
+    """
+    If a user selected multiple articlesets upon uploading, (s)he will be redirected here for
+    an overview of those sets.
+    """
+    model = ArticleSet
+    parent = ArticleSetListView
+    context_category = 'Articles'
+    rowlink = './../{id}'
+    url_fragment = 'multiple'
+
+    def filter_table(self, table):
+        return table.filter(pk=self.request.GET.getlist('set'), project=self.project)
 
 class ArticleSetUploadView(ProjectScriptView):
     parent = ArticleSetUploadListView

@@ -122,9 +122,27 @@ class KWICField(CharField):
         hl = obj.highlight.get('headline')
         if not hl: hl = obj.highlight.get('text')
         if hl:
-            m = RE_KWIC.match(hl[0])
+            # try to get match of first word
+            use_hl = hl[0]
+            if obj._searchresult.query:
+                matches = [RE_KWIC.match(x) for x in hl]
+                matches = [x.groupdict()['keyword'].lower() for x in matches if x]
+                query = re.sub("[^\w ]", "", obj._searchresult.query)
+                query = query.split()[0].lower()
+                print(query, matches, query in matches)
+                if query in matches:
+                    use_hl = hl[matches.index(query)]
+                else:
+                    for i, match in enumerate(matches):
+                        if match.startswith(query):
+                            use_hl = hl[i]
+                            break
+
+            m = RE_KWIC.match(use_hl)
             if m:
-                return m.groupdict()[self.kwic]
+                val = m.groupdict()[self.kwic]
+                val = re.sub('<[^<]+?>', '', val)
+                return val
 
 class ScoreField(IntegerField):
     def field_to_native(self, obj, field_name):
@@ -148,7 +166,6 @@ class SearchResource(AmCATResource):
         params = self.request.QUERY_PARAMS
         return [keywordsearch.SearchQuery.from_string(q)
                 for q in params.getlist("q")]
-
 
     def get_queryset(self):
         fields = self.get_serializer().get_fields().keys()
@@ -181,7 +198,7 @@ class SearchResource(AmCATResource):
             filterset.FilterSet.__init__(self, data, queryset, prefix)
 
         class Meta:
-            order_by=True
+            order_by = True
 
     def get_serializer_context(self):
         ctx = super(SearchResource, self).get_serializer_context()

@@ -184,6 +184,12 @@ annotator = (function(self){
         var icon = self.save_btn.find(".glyphicon");
         icon.removeClass("glyphicon-floppy-disk glyphicon-floppy-saved");
         icon.addClass("glyphicon-floppy-" + ((self.unsaved) ? "disk" : "saved"));
+
+        if (self.unsaved){
+            self.save_btn.removeClass("disabled");
+        } else {
+            self.save_btn.addClass("disabled");
+        }
     };
 
     self.show_unsaved_changes = function show_unsaved_changes(continue_func){
@@ -372,11 +378,7 @@ annotator = (function(self){
     /******** PUBLIC FUNCTIONS *******/
     /* Returns true if a coding was modified (article or sentence) */
     self.modified = function modified(){
-        return self.sentence_codings_modified() | self.state.article_coding_modified;
-    };
-
-    self.sentence_codings_modified = function sentence_codings_modified(){
-        return !!(self.state.deleted_codings.length || self.state.modified_codings.length);
+        return self.unsaved;
     };
 
     /* Returns absolute url pointing to this codingjob (slash-terminated)  */
@@ -739,7 +741,7 @@ annotator = (function(self){
             if ($.map($.values(codings[i].values), function(cv){
                 return (!self.is_empty_codingvalue(cv)) || null;
             }).length){
-                return "A non-empty coding with no sentence was found.";
+                return "Cannot save data.\n 1) Make sure all coded sentences have a sentence number.2) Make sure no codings are left empty if your project does not allow this.";
             }
         }
 
@@ -797,6 +799,17 @@ annotator = (function(self){
         }
     };
 
+    self.warn_for_unfinished = function warn_for_unfinished(){
+        if (self.state.coded_article.status !== self.STATUS.IN_PROGRESS){
+            new PNotify({
+                "type": "warning",
+                "text": "Setting status to 'unfinished' while field validation failed."
+            });
+        }
+
+        self.set_status(self.STATUS.IN_PROGRESS);
+    };
+
     /*
      * Save codings.
      *
@@ -831,13 +844,15 @@ annotator = (function(self){
         // Check whether we want to save, by first checking the mandetory checks.
         var validation = self.mandetory_validate();
         if (validation !== true){
+            self.warn_for_unfinished();
             return self.show_message("Validation", validation);
         }
 
         // Check optional requirements
         validation = validate ? self.validate() : true;
         if (validation !== true){
-            return self.show_message("Validation", validation);
+            self.warn_for_unfinished();
+            self.show_message("Validation", validation);
         }
 
         // Send coding values to server
@@ -893,7 +908,7 @@ annotator = (function(self){
 
     self._select = function _select(row){
         if (row.length === 0){
-            self.loading_dialog.text("Last article reached, coding done!").dialog("open");
+            self.loading_dialog.text("Last article finished, coding done!").dialog("open");
             return;
         }
 
@@ -1347,6 +1362,11 @@ annotator = (function(self){
     };
 
     self.datatables_row_clicked = function datatables_row_clicked(row){
+        // Do nothing if header is clicked
+        if (row.closest("thead").length){
+            return;
+        }
+
         if(self.unsaved){
             return self.show_unsaved_changes((function(){
                 self.datatables_row_clicked.bind(this)(row);
@@ -1374,8 +1394,9 @@ annotator = (function(self){
 
     self.initialise_shortcuts = function initialise_shortcuts(){
         $.each(self.shortcuts(), function(keys, callback){
-            $(document).bind('keydown.' + keys, function(event){
+            $(document).delegate('*', 'keydown.' + keys, function(event){
                 event.preventDefault();
+                event.stopPropagation();
                 callback(event);
             });
         })

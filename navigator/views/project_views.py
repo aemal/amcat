@@ -16,22 +16,24 @@
 # You should have received a copy of the GNU Affero General Public        #
 # License along with AmCAT.  If not, see <http://www.gnu.org/licenses/>.  #
 ###########################################################################
+import json
 
 from django.core.urlresolvers import reverse
+from django.views.generic.list import ListView
+from django.views.generic.edit import UpdateView
 
 from navigator.views.datatableview import DatatableMixin
-from django.views.generic.list import ListView
-from api.rest.datatable import Datatable
 from amcat.models import Project
 from navigator.views.projectview import ProjectViewMixin, HierarchicalViewMixin, BreadCrumbMixin
-from django.views.generic.edit import UpdateView
 from navigator.views.scriptview import ScriptView
 from amcat.scripts.actions.add_project import AddProject
+
+import logging
+log = logging.getLogger("statistics:" + __name__)
 
 class ProjectListView(BreadCrumbMixin, DatatableMixin, ListView):
     model = Project
     template_name = "project/project_list.html"
-
 
     def get(self, *args, **kargs):
         favaction = self.request.GET.get('favaction')
@@ -49,6 +51,9 @@ class ProjectListView(BreadCrumbMixin, DatatableMixin, ListView):
                 [func(id) for id in ids]
 
         return super(ProjectListView, self).get(*args, **kargs)
+
+    def get_datatable_kwargs(self):
+        return {"checkboxes": True}
 
     def get_context_data(self, **kwargs):
         context = super(ProjectListView, self).get_context_data(**kwargs)
@@ -127,4 +132,9 @@ class ProjectAddView(BreadCrumbMixin, ScriptView):
             return super(ProjectAddView, self).get_form(form_class)
 
     def get_success_url(self):
+        log.info(json.dumps({
+            "action": "project_added", "project_id": self.result.id,
+            "name": self.result.name, "description": self.result.description,
+            "insert_user": self.result.insert_user.username
+        }))
         return reverse('article set-list', args=[self.result.id])

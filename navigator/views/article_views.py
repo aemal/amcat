@@ -55,6 +55,14 @@ class ArticleDetailsView(HierarchicalViewMixin, ProjectViewMixin, BreadCrumbMixi
         context['text'] = self.object.text
         context['headline'] = self.object.headline
 
+        context['articleset'] = None
+        if 'articleset_id' in self.kwargs:
+            context['articleset'] = ArticleSet.objects.get(id=self.kwargs['articleset_id'])
+
+        tree = self.object.get_tree()
+        if tree.children:
+            context['tree'] = tree.get_html(active=self.object, articleset=context['articleset'])
+
         # HACK: put query back on session to allow viewing more articles
         self.request.session["query"] = self.last_query
         return context
@@ -186,9 +194,9 @@ def handle_split(form, project, article, sentences):
 
     # We won't use bulk_create yet, as it bypasses save() and doesn't
     # insert ids
+    Article.create_articles(articles)
     for art in articles:
-        art.save()
-        sbd.create_sentences(art)
+        sbd.get_or_create_sentences(art)
 
     if not form.is_valid():
         raise ValueError("Form invalid: {form.errors}".format(**locals()))
@@ -280,7 +288,9 @@ class ArticleSplitView(ProjectFormView):
         if selected_sentence_ids:
             sentences = Sentence.objects.filter(id__in=selected_sentence_ids)
             context = handle_split(form, self.project, self.article, sentences)
+            context = dict(self.get_context_data(**context))
             return render(self.request, "project/article_split_done.html", context)
+        return render(self.request, "project/article_split_empty.html", self.get_context_data())
 
     def get_context_data(self, **kwargs):
         ctx = super(ArticleSplitView, self).get_context_data(**kwargs)
@@ -445,7 +455,7 @@ class TestSplitArticles(amcattest.AmCATTestCase):
             if not codingjob.coded_articles.filter(article=article):
                 return False
 
-        return article.id in (articleset.get_article_ids() & articleset.get_article_ids(use_elastic=True))
+        return article.id in (articleset.get_article_ids() | articleset.get_article_ids(use_elastic=True))
 
 
 
@@ -470,7 +480,7 @@ class TestArticleViews(amcattest.AmCATTestCase):
 
         # Should return a "copy", with byline in "text" property
         arts = _get_articles(article, Sentence.objects.none())
-        map(lambda a : a.save(), arts)
+        Article.create_articles(arts)
 
         self.assertEquals(len(arts), 1)
         sbd.create_sentences(arts[0])
@@ -489,5 +499,3 @@ class TestArticleViews(amcattest.AmCATTestCase):
         # Check if text on splitted articles contains expected
         self.assertTrue("Einde" not in a.text)
         self.assertTrue("Einde" in b.text)
-
-

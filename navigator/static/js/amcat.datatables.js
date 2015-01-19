@@ -34,14 +34,66 @@ _SORTCOL = "iSortCol_";
 _SORTDIR = "sSortDir_";
 _DPROP = "mDataProp_";
 
-function __redirect(format){
-    return function(){
-        var url = $(this.dom.table).parents(".amcat-table-wrapper").data("url");
-        window.location = url + "&format=" + format + "&page_size=999999";
+function export_clicked(){
+    var table = this.table.DataTable();
+    var pks = [];
+
+    if ($(".active", this.table).length !== 0){
+        // Get data from ID column
+        pks = $.map(table.rows(".active").data(), function(o){ return o.id; });
     }
+
+    var url = this.table.parents(".amcat-table-wrapper").data("url");
+    url += "&format=" + this.format.val();
+    url += "&page_size=" + this.page_size.val();
+
+    if(pks.length){
+        url += "&pk=" + pks.join("&pk=");
+    }
+
+    window.location = url;
+    this.modal.modal("hide");
+}
+
+/*
+ * Open dialog after clicking 'export' at top of table.
+ */
+function open_export_dialog(event){
+    var id = this.dom.table.id + "-export-dialog";
+    var modal = $("#" + id);
+    var amount = $(".active", this.dom.table).length;
+
+    if (amount === 0){
+        // No rows selected: we're exporting all items.
+        amount = $(this.dom.table).DataTable().page.info().recordsTotal;
+    }
+
+    $("[name=page_size]", modal).attr("max", amount).val(amount);
+    $(".num_items", modal).text(amount);
+
+    var data = {
+        format: $("[name=format]", modal),
+        page_size: $("[name=page_size]", modal),
+        task: false,
+        modal: modal,
+        table: $(this.dom.table)
+    };
+
+    $("[name=export]", modal).unbind().click(export_clicked.bind(data));
+
+    modal.modal();
 }
 
 
+function _set_action_buttons(table){
+    table = table.closest(".amcat-table-wrapper");
+
+    if($(table).find("tr.active").length){
+        $(".actions .btn", table).removeClass("disabled");
+    } else {
+        $(".actions .btn", table).addClass("disabled");
+    }
+}
 
 // Default options passed to datatables.
 _AMCAT_DEFAULT_OPTS = {
@@ -49,43 +101,34 @@ _AMCAT_DEFAULT_OPTS = {
     fnRowCallback : function(nRow){
         amcat.datatables.truncate_row(nRow);
     },
+    searching: true,
     bDeferRender: true,
     bFilter: false,
     iDisplayLength : 100,
     bProcessing: true,
     "scrollX": "100%",
-    dom: 'T<"clear">lfrtip',
+    dom: 'T<"actions"><"clear">lfrtip',
     tableTools: {
         sRowSelect: "os",
+        // Also select checkbox in front of row.
+        fnRowSelected: function(nodes){
+            $.each(nodes, function(i, row){
+                $(row).find(".row-checkbox").prop("checked", true)
+            });
+
+            _set_action_buttons($(this.dom.table));
+        },
+        fnRowDeselected: function(nodes){
+            $.each(nodes, function(i, row){
+                $(row).find(".row-checkbox").prop("checked", false)
+            });
+
+            _set_action_buttons($(this.dom.table));
+        },
         aButtons: ["select_all", "select_none", {
-            "sExtends": "collection",
-            "sButtonText": "Export as..",
-            "aButtons": [
-            {
-                sExtends: "text",
-                "sButtonText": "CSV",
-                "fnClick": __redirect("csv")
-            },
-            {
-                sExtends: "text",
-                "sButtonText": "Excel",
-                "fnClick": __redirect("xlsx")
-            },
-            {
-                sExtends: "text",
-                "sButtonText": "JSON",
-                "fnClick": __redirect("json")
-            },
-            {
-                sExtends: "text",
-                "sButtonText": "SPSS",
-                "fnClick": __redirect("spss")
-            },
-            {
-                sExtends: "text",
-                "sButtonText": "HTML",
-                "fnClick": __redirect("xhtml")
-            }]
+            "sExtends": "text",
+            "sButtonText": "Export",
+            "fnClick": open_export_dialog
         }]
     },
     "lengthMenu": [[100, 300, 1000, 10000000], [100, 300, 1000, "All"]],
@@ -156,7 +199,20 @@ amcat.datatables.create_rest_table = function (cont, rest_url, optional_args) {
         "sAjaxDataProp": "results",
         "fnServerData": amcat.datatables.fnServerData.bind(state),
         "bServerSide": true,
-        "bStateSave": true
+        "bStateSave": true,
+        "initComplete": function(settings){
+            // Set placeholder for search input field
+            var filter_wrapper = $(settings.nTableWrapper).find(".dataTables_filter > label");
+
+            // Remove text nodes
+            filter_wrapper.contents().filter(function() {
+                // Node.TEXT_NODE
+                return this.nodeType === 3;
+            }).remove();
+
+            // Add placeholder
+            filter_wrapper.find("input").prop("placeholder", "Search..");
+        }
     });
 
     // Add our default options
@@ -166,10 +222,17 @@ amcat.datatables.create_rest_table = function (cont, rest_url, optional_args) {
 
     console.log("Fetching OPTIONS for table: ", state.name);
 
+    // We'll use POST to tranmit our GET parameters
+    var urldata = amcat.datatables.getDataUrl(rest_url);
+
     $.ajax({
         dataType: "json",
-        type: "OPTIONS",
-        url: rest_url,
+        type: "POST",
+        data: urldata[1],
+        headers: {
+            "X-HTTP-METHOD-OVERRIDE": "OPTIONS"
+        },
+        url: urldata[0],
         success: amcat.datatables.fetched_initial_success.bind(state),
         error: amcat.datatables.fetched_initial_error.bind(state)
     });
@@ -183,7 +246,6 @@ amcat.datatables.truncate_row = function(row, limit){
 
     $.each($("td", row), function(i, cell){
         txt = $(cell).text();
-
 	// HACK: treat kwic 'left' context differently, better would be to specify this as an option/class somehow
 
 	th = $('table.datatable').find('th').eq($(cell).index());
@@ -311,7 +373,10 @@ amcat.datatables.load_metadatas = function(callback){
 
         $.ajax({
             dataType : "json",
-            type : "OPTIONS",
+            type : "POST",
+            headers: {
+                "X-HTTP-METHOD-OVERRIDE": "OPTIONS"
+            },
             url : this.metadata.models[fieldname],
             success : amcat.datatables.load_metadata_success.bind(ctx),
             error : amcat.datatables.fetched_initial_error.bind(ctx)
@@ -420,6 +485,21 @@ amcat.datatables.fetch_needed_labels = function(callback, dummy){
     return fetching;
 };
 
+var entityMap = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': '&quot;',
+    "'": '&#39;',
+    "/": '&#x2F;'
+  };
+/* from http://stackoverflow.com/a/12034334, does js really not have an escape function??? */
+function escapeHtml(string) {
+    return String(string).replace(/[&<>"'\/]/g, function (s) {
+	return entityMap[s];
+    });
+}
+
 /*
  * Handles new objects which are received. It tries to determine if all
  * labels are already available. If they are, it calls the correct funtions
@@ -459,7 +539,14 @@ amcat.datatables.table_objects_received = function(data, textStatus, jqXHR){
             amcat.datatables.put_labels(this, data.results, fieldname);
         }
     }
-
+    // Escape strings as needed
+    for (var row in data.results) {
+	for (var field in data.results[row]) {
+	    if (typeof data.results[row][field] == "string") {
+		data.results[row][field] = escapeHtml(data.results[row][field]);
+	    }
+	}
+    }
     this.callbacks[data.echo].fnCallback(data);
 };
 
@@ -506,7 +593,22 @@ amcat.datatables.get_order_by_query = function(aoData){
 
         res.push(((dir == "desc") ? "-" : "") + prop);
     }
-    return "order_by=" + res.join("&order_by=");
+    return "order_by=" + res.join(",");
+};
+
+/*
+ * Returns a tuple (url, data) for a given url. For example:
+ *
+ * 'blaat?a=b&c=d' => ['blaat', 'a=b&c=d'],
+ */
+amcat.datatables.getDataUrl = function(url){
+    var parser = document.createElement('a');
+    parser.href = url;
+
+    return [
+        parser.protocol + "//" + parser.host + parser.pathname,
+        (parser.search[0] === '?') ? parser.search.substring(1) : parser.search
+    ]
 };
 
 /*
@@ -526,9 +628,12 @@ amcat.datatables.fnServerData = function(sSource, aoData, fnCallback){
     sSource += ((sSource.indexOf("?") !== -1) ? "&" : "?");
     sSource += "page=" + page + "&page_size=" + page_size;
     sSource += "&datatables_options=" + encodeURIComponent(JSON.stringify({
-        sSearch : search,
         sEcho : echo
     }));
+
+    if (search !== undefined){
+        sSource += "&search=" + search;
+    }
 
     // Add ordering
     sSource += "&" + amcat.datatables.get_order_by_query(aoData);
@@ -537,10 +642,17 @@ amcat.datatables.fnServerData = function(sSource, aoData, fnCallback){
     this.callbacks[echo].fnCallback= fnCallback;
     this.callbacks[echo].aoData = aoData;
 
+    // We'll use POST to tranmit our GET parameters
+    var urldata = amcat.datatables.getDataUrl(sSource);
+
     $.ajax({
         dataType : "json",
-        type : "GET",
-        url : sSource,
+        type : "POST",
+        data : urldata[1],
+        headers: {
+            "X-HTTP-METHOD-OVERRIDE": "GET"
+        },
+        url : urldata[0],
         success : amcat.datatables.table_objects_received.bind(this),
         error : amcat.datatables.fetched_initial_error.bind(this)
     });
@@ -697,7 +809,6 @@ amcat.datatables.fetched_initial_success = function (data, textStatus, jqXHR) {
 
     // Call datatables
     console.log("Calling dataTable with options: ", this.datatables_options);
-    console.log(this.table)
     tbl = this.table.dataTable(this.datatables_options);
 
     // Call callback funtion with our datatables object as its

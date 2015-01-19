@@ -136,3 +136,20 @@ tr.active{
     float:right;
     margin-bottom:5px;
 }
+
+.row-checkbox{
+    margin: 0px 5px 0px 0px !important;
+}
+
+.dataTables_filter, .actions > .btn-group, .actions > div{
+    padding-right: 5px;
+}
+
+.actions .dropdown-menu{
+    left:inherit;
+    top:inherit;
+}
+
+.actions form{
+    display: inline-block;
+}

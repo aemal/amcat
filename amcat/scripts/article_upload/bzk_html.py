@@ -1,4 +1,4 @@
-###########################################################################
+# ##########################################################################
 #          (C) Vrije Universiteit, Amsterdam (the Netherlands)            #
 #                                                                         #
 # This file is part of AmCAT - The Amsterdam Content Analysis Toolkit     #
@@ -22,6 +22,7 @@ Plugin for uploading html files of a certain markup, provided by BZK
 """
 
 from __future__ import unicode_literals, absolute_import
+from amcat.models import ArticleSet
 from amcat.scripts.article_upload.upload import UploadScript
 from amcat.tools.toolkit import readDate
 from amcat.models.medium import Medium
@@ -29,19 +30,23 @@ from amcat.models.article import Article
 from lxml import html
 from html2text import html2text
 import re
-import logging; log = logging.getLogger(__name__)
+import logging;
+
+log = logging.getLogger(__name__)
 from amcat.scripts.article_upload.bzk_aliases import BZK_ALIASES as MEDIUM_ALIASES
+
 
 class BZK(UploadScript):
     def _scrape_unit(self, _file):
-        if type(_file) == unicode: #command line
+        if type(_file) == unicode:  #command line
             etree = html.fromstring(_file)
-        else: #web interface
+        else:  #web interface
             try:
                 etree = html.parse(_file).getroot()
             except IOError as e:
                 log.exception("Failed html.parse")
-                raise TypeError("failed HTML parsing. Are you sure you've inserted the right file?\n{e}".format(**locals()))
+                raise TypeError(
+                    "failed HTML parsing. Are you sure you've inserted the right file?\n{e}".format(**locals()))
 
         title = etree.cssselect("title")
         if title:
@@ -62,18 +67,21 @@ class BZK(UploadScript):
             divs = _html.cssselect("#articleTable div")
         elif "intranet/rss" in t:
             divs = [div for div in _html.cssselect("#sort div") if "sort_" in div.get('id')]
+        else:
+            raise ValueError("Neither 'werkmap' nor 'intranet/rss' in html.")
 
         for div in divs:
-            article = Article(metastring = {})
-            article.metastring['html'] = div
+            article = Article(metastring={'html': div})
             article.headline = div.cssselect("#articleTitle")[0].text_content()
             article.text = div.cssselect("#articleIntro")[0]
             articlepage = div.cssselect("#articlePage")
+
             if articlepage:
                 article.pagenr, article.section = self.get_pagenum(articlepage[0].text)
 
             article.medium = self.get_medium(div.cssselect("#sourceTitle")[0].text)
             date_str = div.cssselect("#articleDate")[0].text
+
             try:
                 article.date = readDate(date_str)
             except ValueError:
@@ -83,18 +91,27 @@ class BZK(UploadScript):
 
     def scrape_2(self, _html):
         """New format as of 2014 and a few days before"""
-        docdate = readDate(_html.cssselect("h1")[0].text.split("-")[1])
+        title = _html.cssselect("h1")[0]
+        if not title.text:
+            title = title.cssselect("span")[0]
+        docdate = readDate(title.text.split("-")[1])
 
-        #split body by <hr>
+        # split body by <hr>
         items = []
         item = []
-        if len(_html.cssselect("body > *")) == 1:
-            tags = _html.cssselect("body > div > *") #extra div wrapper as of 2014-04-08
+        
+
+        if len(_html.cssselect("body > hr")) == 0:
+            #if len(_html.cssselect("body > div > hr")) == 0:
+                # extra extra div  and span wrapper as of 2014-11-20
+            #    tags = _html.cssselect("body > div > div > span > *")
+            #else: # extra div wrapper as of 2014-04-08
+                tags = _html.cssselect("body > div > *")
         else:
             tags = _html.cssselect("body > *")
 
         for child in tags:
-            if child.tag == "hr":
+            if child.tag == "hr" or (child.tag == "div" and child.cssselect("span > hr")):
                 items.append(item)
                 item = []
             else:
@@ -144,22 +161,24 @@ class BZK(UploadScript):
             article.date = None
         return article
 
+    def _parse_text(self, item):
+        paragraphs = (tag for tag in item if tag.tag in ("p", "div"))
+        return "\n".join(html2text(html.tostring(p)) for p in paragraphs)
+
     def parse_item(self, item):
         #item: a list of html tags
-        article = Article(metastring = {})
+        article = Article(metastring={})
+        article.text = self._parse_text(item)
         for tag in item:
-            if tag.tag in ("p","div"):
-                if not (hasattr(article,'text') or article.text):
-                    article.text.append(tag)
+            if tag.tag == "h2":
+                if tag.text:
+                    article.headline = tag.text
                 else:
-                    article.text = [tag]
-            elif tag.tag == "h2":
-                article.headline = tag.text
-            elif tag.tag == "i":
+                    article.headline = tag.cssselect("span")[0].text_content()
+            elif tag.tag == "i" or (tag.tag == "p" and tag.cssselect("i")):
                 article = self.parse_dateline(tag.text_content(), article)
-        #process html
-        article.text = "\n".join([html2text(html.tostring(bit)) for bit in article.text])
-
+        if not article.headline:
+            raise Exception("Article has no headline")
         return article
 
     def get_medium(self, text):
@@ -178,8 +197,10 @@ class BZK(UploadScript):
             section = section.strip()
         return int(pagenum), section
 
+
 if __name__ == "__main__":
     from amcat.scripts.tools import cli
+
     cli.run_cli(BZK)
 
 
@@ -189,29 +210,24 @@ if __name__ == "__main__":
 
 from amcat.tools import amcattest
 
+
 class TestBZK(amcattest.AmCATTestCase):
     def setUp(self):
         from django.core.files import File
-        import os.path, json
+        import os.path
+
         self.dir = os.path.join(os.path.dirname(__file__), 'test_files', 'bzk')
-        self.bzk = BZK(project = amcattest.create_test_project().id,
-                  file = File(open(os.path.join(self.dir, 'test.html'))),
-                  articleset = amcattest.create_test_set().id)
-        self.result = self.bzk.run()
+        self.bzk = BZK(project=amcattest.create_test_project().id,
+                       file=File(open(os.path.join(self.dir, 'test.html'))),
+                       articlesets=[amcattest.create_test_set().id])
+        self.result = ArticleSet.objects.get(id=self.bzk.run()[0]).articles.all()
 
-        def test_scrape_unit(self):
-            self.assertTrue(self.result)
+    def test_scrape_unit(self):
+        self.assertTrue(self.result)
 
-        def test_scrape_file(self):
-            #props to check for:
-            # headline, text, pagenr, section, medium, date
-            must_props = ('headline', 'text', 'medium', 'date')
-            may_props = ('pagenr','section')
-            must_props = [[getattr(a,prop) for a in self.result] for prop in must_props]
-            may_props = [[getattr(a,prop) for a in self.result] for prop in may_props]
+    def test_scrape_file(self):
+        must_props = ('headline', 'text', 'medium', 'date')
+        must_props = [[getattr(a, prop) for a in self.result] for prop in must_props]
 
-            for proplist in must_props:
-                self.assertTrue(all(proplist))
-            for proplist in may_props:
-                #assuming at least one of the articles has the property. if not, break
-                self.assertTrue(any(proplist))
+        for proplist in must_props:
+            self.assertTrue(all(proplist))

@@ -89,6 +89,19 @@ SITE_ID = 1
 # to load the internationalization machinery.
 USE_I18N = False
 
+# Accept a range of date formats in forms
+DATE_INPUT_FORMATS = (
+    # Defaults
+    '%Y-%m-%d', '%Y/%m/%d',             # '2006-10-25', '2006/10/25'
+    '%b %d %Y', '%b %d, %Y',            # 'Oct 25 2006', 'Oct 25, 2006'
+    '%d %b %Y', '%d %b, %Y',            # '25 Oct 2006', '25 Oct, 2006'
+    '%B %d %Y', '%B %d, %Y',            # 'October 25 2006', 'October 25, 2006'
+    '%d %B %Y', '%d %B, %Y',            # '25 October 2006', '25 October, 2006'
+
+    # Added manually
+    '%d-%m-%Y', '%d/%m/%Y',             # '25-10-2006', '25/10/2006'
+)
+
 # Absolute path to the directory that holds media.
 # Example: "/home/media/media.lawrence.com/"
 MEDIA_ROOT = os.path.join(ROOT, 'navigator', 'media')
@@ -225,18 +238,32 @@ SECRET_KEY = get_secret()
 FIXTURE_DIRS = (os.path.join(ROOT, "amcat/models"),)
 
 REST_FRAMEWORK = {
+    # Pagination
     'PAGINATE_BY': 10,
     'PAGINATE_BY_PARAM': 'page_size',
     'DEFAULT_PAGINATION_SERIALIZER_CLASS': 'api.rest.serializer.AmCATPaginationSerializer',
+
+    # Filtering / models
+    'ORDERING_PARAM': 'order_by',
+    'SEARCH_PARAM': 'search',
     'DEFAULT_MODEL_SERIALIZER_CLASS': 'api.rest.serializer.AmCATModelSerializer',
-    'FILTER_BACKEND': 'api.rest.filters.AmCATFilterBackend',
-    'DEFAULT_RENDERER_CLASSES': ('rest_framework.renderers.BrowsableAPIRenderer',
-                                 'rest_framework.renderers.JSONRenderer',
-                                 'api.rest.tablerenderer.CSVRenderer',
-                                 'api.rest.tablerenderer.XLSXRenderer',
-                                 'api.rest.tablerenderer.SPSSRenderer',
-                                 'api.rest.tablerenderer.XHTMLRenderer',
+    'DEFAULT_FILTER_BACKENDS': (
+        'api.rest.filters.DjangoPrimaryKeyFilterBackend',
+        'api.rest.filters.MappingOrderingFilter',
+        'rest_framework.filters.SearchFilter',
     ),
+
+    # Rendering
+    'DEFAULT_RENDERER_CLASSES': (
+        'rest_framework.renderers.BrowsableAPIRenderer',
+        'rest_framework.renderers.JSONRenderer',
+        'api.rest.tablerenderer.CSVRenderer',
+        'api.rest.tablerenderer.XLSXRenderer',
+        'api.rest.tablerenderer.SPSSRenderer',
+        'api.rest.tablerenderer.XHTMLRenderer',
+    ),
+
+    # Auth
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework.authentication.BasicAuthentication',
         'rest_framework.authentication.SessionAuthentication',

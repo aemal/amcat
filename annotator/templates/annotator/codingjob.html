@@ -117,8 +117,16 @@
                 "length", "status", "comments"
             ];
 
+            var sortable = [
+                "id", "headline", "comments", "article_id", "medium", "date",
+                "pagenr", "length"
+            ];
+
             $.each(column_order, function(i, colname){
-                columns.push({ mData : colname, aTargets : [colname]});
+                columns.push({
+                    bSortable: sortable.indexOf(colname) !== -1,
+                    mData : colname, aTargets : [colname]
+                });
             });
 
             amcat.datatables.create_rest_table(jqueryElement, url, {
@@ -127,6 +135,7 @@
                     iDisplayLength: 100000,
                     aoColumns: columns,
                     sScrollY: "100px",
+                    searching: false,
 
                     fnDrawCallback: function(){
                         $("tr", $("#article-table-container")).click(function(event){

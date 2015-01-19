@@ -44,22 +44,19 @@ if(!window.console.trace){
 /* Enable multiselect */
 $(function(){
    $.each($("select.multiselect"), function(i, el){
-      el = $(el).multiselect({
+      $(el).multiselect({
          minWidth : 300,
          multiple : el.multiple,
-         header : '',
          selectedList : 5
       }).multiselectfilter({filter: amcat.multiselectCheckIfMatches});
-
    });
-   
 });
 
 function confirm_dialog(event) {
         event.preventDefault();
        
         var dialog = $('' +
-            '<div class="modal fade">' +
+            '<div class="modal fade" tabindex="-1">' +
                 '<div class="modal-dialog"><div class="modal-content"><div class="modal-header">' +
                         '<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>' +
                         '<h3 class="noline">Irreversible action</h3>' +
@@ -72,6 +69,15 @@ function confirm_dialog(event) {
                     '<a href="' +  $(event.currentTarget).attr("href") + '" class="btn btn-danger">Proceed</a>' +
                 '</div>' +
             '</div></div></div>').modal("show");
+
+        // Submit form if button has type=submit
+        var btn = $(event.currentTarget);
+        if(btn.is("[type=submit]")){
+            dialog.find("a.btn-danger").click(function(event){
+                event.preventDefault();
+                btn.closest("form").submit();
+            });
+        }
 
         $(".cancel-button", dialog).click((function(){
             this.modal("hide");
@@ -391,4 +397,22 @@ amcat.getFormDict = function(form){
     return o;
 }
 
+/* Switch layouts */
+$(function(){
+    $("#layout-switcher").click(function(event){
+        event.preventDefault();
+        // Switch classes, etc.
+        $(".container,.container-fluid").toggleClass("container container-fluid");
+        $("#layout-switcher i").toggleClass("glyphicon-resize-small glyphicon-resize-full")
+        $("body").focus();
 
+        // Resize datatables
+        $.each($.fn.dataTable.tables(), function(i, table){
+            var settings = $(table).DataTable().settings()[0];
+            settings.oApi._fnAdjustColumnSizing(settings);
+        });
+
+        // Make change permanent. TODO: Make it an API call.
+        $.get("/navigator/?fluid=" + $("body > .container-fluid").length)
+    });
+});

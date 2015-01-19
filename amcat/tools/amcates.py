@@ -71,7 +71,8 @@ def get_article_dict(art, sets=None):
 
 def _get_hash(article_dict):
     c =hash_class()
-    keys = sorted(k for k in article_dict.keys() if k not in ('id', 'sets', 'hash', 'medium', 'projectid'))
+    keys = sorted(k for k in article_dict.keys()
+                  if k not in ('id', 'sets', 'hash', 'medium', 'projectid'))
     for k in keys:
         v = article_dict[k]
         if isinstance(v, int):
@@ -82,19 +83,34 @@ def _get_hash(article_dict):
             c.update(v)
     return c.hexdigest()
 
-HIGHLIGHT_OPTIONS = {'fields' : {'text' : {"fragment_size" : 100, "number_of_fragments" : 3},
-                                 'headline' : {}}}
-LEAD_SCRIPT_FIELD = {"lead" : {'lang' : 'python',
-                               "script" : '_source["text"] and _source["text"][:300] + "..."'}}
+HIGHLIGHT_OPTIONS = {
+    'fields': {
+        'text': {
+            "fragment_size": 100,
+            "number_of_fragments": 3
+        },
+        'headline': {}
+    }
+}
+
+LEAD_SCRIPT_FIELD = {
+    "lead": {
+        'lang': 'python',
+        "script": r'_source["text"].replace("\r", "").split("\n\n")[0]'
+    }
+}
+
 UPDATE_SCRIPT_REMOVE_FROM_SET = 'ctx._source.sets = ($ in ctx._source.sets if $ != set)'
+
 UPDATE_SCRIPT_ADD_TO_SET = 'if (!(ctx._source.sets contains set)) {ctx._source.sets += set}'
 
 UPDATE_SCRIPT_ADD_TO_SET = ("if (ctx._source.sets == null) {ctx._source.sets = [set]} "
                             "else { if (!(ctx._source.sets contains set)) {ctx._source.sets += set}}")
 
+
 class SearchResult(object):
     """Iterable collection of results that also has total"""
-    def __init__(self, results, fields, score, body):
+    def __init__(self, results, fields, score, body, query=None):
         "@param results: the raw results dict from elasticsearch::search"
         self._results = results
         self.hits = self._results['hits']['hits']
@@ -102,11 +118,12 @@ class SearchResult(object):
         self.fields = fields
         self.score = score
         self.body = body
+        self.query = query
 
     @property
     @cached
     def results(self):
-        return [Result.from_hit(h, self.fields, self.score) for h in self.hits]
+        return [Result.from_hit(self, h, self.fields, self.score) for h in self.hits]
 
     def __len__(self):
         return len(self.hits)
@@ -125,7 +142,7 @@ class SearchResult(object):
 class Result(object):
     """Simple class to hold arbitrary values"""
     @classmethod
-    def from_hit(cls, row, fields, score=True):
+    def from_hit(cls, searchresult, row, fields, score=True):
         "@param hit: elasticsearch hit dict"
         field_dict = {f: None for f in fields}
         if 'fields' in row:
@@ -137,7 +154,7 @@ class Result(object):
                         v = v[0]
                 field_dict[k] = v
 
-        result =  Result(id=int(row['_id']), **field_dict)
+        result =  Result(id=int(row['_id']), _searchresult=searchresult, **field_dict)
         if score: result.score = int(row['_score'])
         if 'highlight' in row: result.highlight = row['highlight']
         if hasattr(result, 'date'):
@@ -145,6 +162,19 @@ class Result(object):
                 result.date = datetime.strptime(result.date, '%Y-%m-%d')
             else:
                 result.date = datetime.strptime(result.date[:19], '%Y-%m-%dT%H:%M:%S')
+        return result
+
+    @classmethod
+    def from_stats(cls, stats, date=False, **kargs):
+        """Create a Result object from an ES statistics dict {u'count': 0, u'max': ...}"""
+        result = Result(**kargs)
+        result.count = stats['count']
+        if result.count == 0:
+            result.start_date, result.end_data = None, None
+        else:
+            f = get_date if date else int
+            result.min=f(stats['min'])
+            result.max=f(stats['max'])
         return result
 
     def __init__(self, **kwargs):
@@ -155,9 +185,9 @@ class Result(object):
         return "{}({})".format(type(self).__name__, ", ".join(items))
 
 class ES(object):
-    def __init__(self, index=None, doc_type=None, **args):
+    def __init__(self, index=None, doc_type=None, timeout=60, **args):
         elhost = {"host":settings.ES_HOST, "port":settings.ES_PORT}
-        self.es = Elasticsearch(hosts=[elhost, ], **args)
+        self.es = Elasticsearch(hosts=[elhost, ], timeout=timeout, **args)
         self.index = settings.ES_INDEX if index is None else index
         self.doc_type = settings.ES_ARTICLE_DOCTYPE if doc_type is None else doc_type
 
@@ -234,7 +264,6 @@ class ES(object):
         Note that query and filters can be combined in a single call
         """
         body = dict(build_body(query, filters, query_as_filter=True))
-        log.debug("Query_ids body={body!r}".format(**locals()))
         options = dict(scroll="1m", size=1000, fields="")
         options.update(kwargs)
         res = self.search(body, search_type='scan', **options)
@@ -260,7 +289,7 @@ class ES(object):
             body['query'] = {'constant_score' : {'query' : body['query']}}
 
         if 'sort' in kwargs: body['track_scores'] = True
-        
+
         if highlight:
             if isinstance(highlight, dict):
                 body['highlight'] = highlight
@@ -268,9 +297,8 @@ class ES(object):
                 body['highlight'] = HIGHLIGHT_OPTIONS
         if lead: body['script_fields'] = LEAD_SCRIPT_FIELD
 
-        log.debug("es.search(body={body}, **{kwargs})".format(**locals()))
         result = self.search(body, fields=fields, **kwargs)
-        return SearchResult(result, fields, score, body)
+        return SearchResult(result, fields, score, body, query=query)
 
     def query_all(self, *args, **kargs):
         kargs.update({"from_" : 0})
@@ -315,7 +343,7 @@ class ES(object):
         batches = list(splitlist(article_ids, itemsperbatch=1000))
         nbatches = len(batches)
         for i, batch in enumerate(batches):
-            monitor.update(40/nbatches, "Added batch {i}/{nbatches}".format(**locals()))
+            monitor.update(40/nbatches, "Added batch {iplus}/{nbatches}".format(iplus=i+1, **locals()))
             self.bulk_update(article_ids, UPDATE_SCRIPT_ADD_TO_SET, params={'set' : setid})
 
     def bulk_insert(self, dicts):
@@ -388,48 +416,48 @@ class ES(object):
         result = self.es.count(index=self.index, doc_type=settings.ES_ARTICLE_DOCTYPE, body=body)
         return result["count"]
 
+    def search_aggregate(self, aggregation, query=None, filters=None):
+        """
+        Run an aggregate search query and return the aggregation results
+        @param aggregation: raw elastic query, e.g. {"terms" : {"field" : "medium"}}
+        """
+        body = dict(query={"filtered": dict(build_body(query, filters, query_as_filter=True))},
+                    aggregations={"aggregation": aggregation})
+        result = self.search(body, size=0, search_type="count")
+        return result['aggregations']['aggregation']
 
-    def aggregate_query(self, query=None, filters=None, group_by=None, date_interval='month'):
+    def aggregate_query(self, query=None, filters=None, group_by=None, date_interval='month', stats=None):
         """
         Compute an aggregate query, e.g. select count(*) where <filters> group by <group_by>
         If date is used as a group_by variable, uses date_interval to bin it
         Currently, group by must be a single field as elastic doesn't support multiple group by
+        (Note: this should be possible in elastic now)
+        @param stats: if given, return stats objects for that field (min, max, count, sum) instead of count
         """
-
-        filters=dict(build_body(query, filters, query_as_filter=True))
-
-        if group_by == 'date':
-            group = {'date_histogram' : {'field' : group_by, 'interval' : date_interval}}
+        date = group_by == 'date'
+        if date:
+            aggregation = {'date_histogram': {'field': group_by, 'interval': date_interval}}
         else:
-            group = {'terms' : {'size' : 999999, 'field' : group_by}}
-        body = {"query" : {"constant_score" : filters},
-                "facets" : {"group" : group}}
-        log.debug("es.search(body={body})".format(**locals()))
+            aggregation = {'terms': {'size': 999999, 'field': group_by}}
+        if stats:
+            aggregation['aggregations'] = {'statistics': {"stats": {"field": stats}}}
 
-        result = self.search(body, size=0)
-        if group_by == 'date':
-            for row in result['facets']['group']['entries']:
-                yield get_date(row['time']), row['count']
-
-        else:
-            for row in result['facets']['group']['terms']:
-                yield row['term'], row['count']
+        result = self.search_aggregate(aggregation, query=query, filters=filters)
+        for bucket in result['buckets']:
+            key, val = bucket['key'], bucket['doc_count']
+            if date:
+                key = get_date(key)
+            if stats:
+                val = Result.from_stats(bucket['statistics'], date=date, ntotal=val)
+            yield key, val
 
     def statistics(self, query=None, filters=None):
         """
         Compute and return a Result object with n, start_date and end_date for the selection
         """
-        body = {"query" : {"constant_score" : dict(build_body(query, filters, query_as_filter=True))}}
-        body['facets'] = {'stats' : {'statistical' : {'field' : 'date'}}}
-        stats = self.search(body, size=0)['facets']['stats']
-        result = Result()
-        result.n = stats['count']
-        if result.n == 0:
-            result.start_date, result.end_data = None, None
-        else:
-            result.start_date=get_date(stats['min'])
-            result.end_date=get_date(stats['max'])
-        return result
+        stats = self.search_aggregate({'stats' : {'field' : 'date'}}, query=query, filters=filters)
+        return Result.from_stats(stats, date=True)
+
 
     def list_media(self, query=None, filters=None):
         """
@@ -620,9 +648,9 @@ class TestAmcatES(amcattest.AmCATTestCase):
 
         # set statistics
         stats = ES().statistics(filters=dict(sets=s1.id))
-        self.assertEqual(stats.n, 4)
-        self.assertEqual(stats.start_date, datetime(2001,1,1))
-        self.assertEqual(stats.end_date, datetime(2002,1,1))
+        self.assertEqual(stats.count, 4)
+        self.assertEqual(stats.min, datetime(2001,1,1))
+        self.assertEqual(stats.max, datetime(2002,1,1))
 
         # media list
         self.assertEqual(set(ES().list_media(filters=dict(sets=s1.id))),
@@ -865,3 +893,16 @@ class TestAmcatES(amcattest.AmCATTestCase):
 
         # test real kanji
         self.assertEqual(set(ES().query_ids(u"\u6f22\u5b57", filters=dict(sets=s1.id))), {a.id})
+
+    @amcattest.use_elastic
+    def test_byline(self):
+        aset = amcattest.create_test_set()
+        amcattest.create_test_article(byline="bob", text="eve", articleset=aset)
+
+        ES().flush()
+
+        q = lambda query: set(ES().query_ids(query, filters={"sets": aset.id}))
+
+        self.assertEqual(1, len(q("byline:bob")))
+        self.assertEqual(0, len(q("byline:eve")))
+        self.assertEqual(1, len(q("bob")))

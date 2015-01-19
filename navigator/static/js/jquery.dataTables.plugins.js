@@ -56,7 +56,41 @@ jQuery.fn.dataTableExt.oApi.fnSetFilteringDelay = function ( oSettings, iDelay )
         return this;
     } );
     return this;
-}
+};
+
+jQuery.fn.dataTableExt.oApi.fnRowCheckbox = function(oSettings){
+    oSettings.aoDrawCallback.push({
+        "fn": function () {
+            $('tbody > tr', oSettings.aanFeatures.t).each(function(i, row){
+                // Add handler for clicking on checkbox
+                $(row.firstChild).prepend(
+                    $("<input type=checkbox class=row-checkbox>").click(function(event){
+                        event.ctrlKey = true;
+                        event.stopPropagation();
+                        $(row).toggleClass("active");
+                        _set_action_buttons($(oSettings.aanFeatures.t));
+                    })
+                ).click(function(event){
+                    event.preventDefault();
+                    event.stopPropagation();
+                    $("input", event.currentTarget).click();
+                });
+            });
+        }
+    });
+};
+
+jQuery.fn.dataTableExt.oApi.fnTableActions = function(oSettings, actions){
+    actions = actions.detach().show().addClass("DTTT");
+    $(".actions", oSettings.nTableWrapper).append(actions);
+
+    oSettings.aoDrawCallback.push({
+        fn: function(){ $(".btn", actions).addClass("disabled"); }
+    });
+
+    // Logic for enabling / disabling buttons is managed in
+    // AMCAT_DEFAULT_OPTS in amcat.datatables.js.
+};
 
 jQuery.fn.dataTableExt.oApi.fnSetRowlink = function(oSettings, sRowlink, sOpenIn){
     /*

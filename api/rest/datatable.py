@@ -16,7 +16,11 @@
 # You should have received a copy of the GNU Affero General Public        #
 # License along with AmCAT.  If not, see <http://www.gnu.org/licenses/>.  #
 ###########################################################################
+import hashlib
+from django.core.exceptions import ImproperlyConfigured
+
 import copy
+import json
 import logging
 import types
 import collections
@@ -34,6 +38,13 @@ from amcat.tools.caching import cached
 from api.rest.resources import get_resource_for_model, AmCATResource
 from api.rest import filters
 
+FILTER_FIELDS = {
+    # Resource : set(fields)
+}
+
+ORDERING_FIELDS = {
+    # Resource : set(fields)
+}
 
 FIELDS_EMPTY = (None, [])
 log = logging.getLogger(__name__)
@@ -50,6 +61,56 @@ def order_by(field):
     )
 
 
+def _get_valid_fields(queryset, view):
+    """
+    This is a copy of a part of OrderingFilter.remove_invalid_fields(). It
+    determines which fields are orderable. A pull request is pending for
+    djangorestframework which would remove this function:
+
+       https://github.com/tomchristie/django-rest-framework/pull/1709
+
+    TODO: Remove function.
+    """
+    valid_fields = getattr(view, 'ordering_fields', None)
+
+    if valid_fields is None:
+        # Default to allowing filtering on serializer fields
+        serializer_class = (
+            getattr(view, 'serializer_class') or
+            view.get_serializer_class())
+
+        if serializer_class is None:
+            msg = ("Cannot use %s on a view which does not have either a "
+                   "'serializer_class' or 'ordering_fields' attribute.")
+            import pdb; pdb.set_trace()
+            raise ImproperlyConfigured(msg % view.__class__.__name__)
+
+        valid_fields = [
+            field.source or field_name
+            for field_name, field in serializer_class().fields.items()
+            if not getattr(field, 'write_only', False)
+        ]
+
+    elif valid_fields == '__all__':
+        # View explictly allows filtering on any model field
+        valid_fields = [field.name for field in queryset.model._meta.fields]
+        valid_fields += queryset.query.aggregates.keys()
+
+    return set(valid_fields)
+
+
+def get_valid_fields(queryset, view):
+    """Caching wrapper around _get_valid_fields()"""
+    # Can we get results from cache?
+    if view.__class__ in ORDERING_FIELDS:
+        return ORDERING_FIELDS[view.__class__]
+
+    # Put results in cache and return
+    fields = _get_valid_fields(queryset, view)
+    ORDERING_FIELDS[view.__class__] = fields
+    return fields
+
+
 class Datatable(object):
     """
     Create HTML / Javascript code for a table based on `handler`. Optional
@@ -61,7 +122,8 @@ class Datatable(object):
     """
 
     def __init__(self, resource, rowlink=None, rowlink_open_in="same", options=None, hidden=None, url=None,
-                 ordering=None, format="json", filters=None, extra_args=None, url_kwargs=()):
+                 ordering=None, format="json", filters=None, checkboxes=False, allow_html_export=False,
+                 extra_args=None, url_kwargs=()):
         """
         Default ordering is "id" if possible.
 
@@ -74,6 +136,12 @@ class Datatable(object):
         @param filters: an optional list of selector/value pairs for filtering
         @param extra_args: an optional list of field/value pairs for extra 'get' options
         @param url_kwargs: if a ViewSet is given, also provide url_kwargs which are used to determine the url
+
+        @param checkboxes: indicates whether checkboxes should be displayed
+        @type checkboxes: bool
+
+        @param allow_html_export: display 'xhtml' as export option
+        @type allow_html_export: bool
         """
         if inspect.isclass(resource) and issubclass(resource, Model):
             resource = get_resource_for_model(resource)
@@ -83,6 +151,8 @@ class Datatable(object):
         self.rowlink = rowlink or getattr(self.resource, "get_rowlink", lambda: None)()
         self.rowlink_open_in = rowlink_open_in
         self.ordering = ordering
+        self.checkboxes = checkboxes
+        self.allow_html_export = allow_html_export
 
         self.format = format
         self.hidden = set(hidden) if isinstance(hidden, collections.Iterable) else set()
@@ -113,8 +183,11 @@ class Datatable(object):
             - underscores ("_")
             - colons (":")
             - and periods (".").
+
+        It is now implemented as the hash of `self.url` prepended with the character
+        'd'. This prevents names from becoming too long.
         """
-        return "d" + re.sub(r'[^0-9A-Za-z_:.-]', '__', self.url)
+        return "d" + hashlib.sha256(self.url).hexdigest()
 
     def get_default_ordering(self):
         return ("-id",) if "id" in self.get_fields() else ()
@@ -141,8 +214,6 @@ class Datatable(object):
                 hasattr(self.resource, "model") and self.resource.model:
             # Try to keep order defined on model if and only if fields
             # is not explicitly defined.
-            ofields = []
-
             for field in self.resource.model._meta.fields:
                 if field.name in fields:
                     fields.remove(field.name)
@@ -170,6 +241,8 @@ class Datatable(object):
             'filters': self.filters,
             'extra_args': self.extra_args,
             'format': self.format,
+            'checkboxes': self.checkboxes,
+            'allow_html_export': self.allow_html_export
         }
         kws.update(kwargs)
         return kws
@@ -183,7 +256,6 @@ class Datatable(object):
         kwargs = self._get_copy_kwargs(**kwargs)
         return self.__class__(resource=self.resource, **kwargs)
 
-
     def get_js(self):
         """Returns a string with rendered javascript"""
         ordering = self.ordering
@@ -194,26 +266,23 @@ class Datatable(object):
         options['aaSorting'] = [list(order_by(f)) for f in ordering]
         options['aoColumns'] = self.get_aoColumns()
         options['aoColumnDefs'] = self.get_aoColumnDefs()
+        options['searching'] = bool(getattr(self.resource, "search_fields", None))
 
         return get_template('api/datatables.js.html').render(Context({
             'id': self.name,
             'rowlink': self.rowlink,
             'rowlink_open_in': self.rowlink_open_in,
             'url': self.url,
-            'options': options
+            'options': json.dumps(options),
+            'checkboxes': self.checkboxes
         }))
 
     def get_aoColumns(self):
-        """
-        Returns a list with (default) columns.
-        """
-
-        class jsbool(int):
-            def __repr__(self):
-                return 'true' if self else "false"
-
-        return self.options.get('aoColumns', [dict(mData=str(n), bSortable=jsbool(self.can_order_by(n)))
-                                              for n in self.fields])
+        """Returns a list with (default) columns."""
+        return self.options.get('aoColumns', [{
+            "mData": str(n),
+            "bSortable": self.can_order_by(n)
+        } for n in self.fields])
 
     def get_aoColumnDefs(self):
         """Use this method to override when providing special colums"""
@@ -254,11 +323,16 @@ class Datatable(object):
         try:
             fc = r.filter_class
         except AttributeError:
-            fc = filters.AmCATFilterBackend().get_filter_class(r, queryset=r.model.objects.all())
+            fc = filters.DjangoPrimaryKeyFilterBackend().get_filter_class(r, queryset=r.model.objects.all())
         return fc()
 
     def can_order_by(self, field):
-        return any(f == field for (f, label) in self._get_filter_class().get_ordering_field().choices)
+        # We can't sort if this is not backed by a DBMS
+        if self.resource.model is None:
+            return False
+
+        valid = get_valid_fields(self.resource.model.objects.none(), self.resource)
+        return order_by(field)[0] in valid
 
     def can_filter(self, field):
         return any(f == field for f in self._get_filter_class().filters.keys())
@@ -279,7 +353,6 @@ class Datatable(object):
                 raise ValueError("Cannot order by field '{}', column does not exist on this table".format(field))
 
         return self.copy(ordering=tuple(fields))
-
 
     def _filter(self, selector, value, check_can_filter=True):
         """
@@ -336,7 +409,6 @@ class Datatable(object):
         url += "".join(['&%s' % self._filter(sel, val, check_can_filter=False) for (sel, val) in self.extra_args])
         return url
 
-
     def __unicode__(self):
         links = {}
         for fmt in ["api", "csv", "json", "xlsx", "spss", "xhtml"]:
@@ -348,6 +420,7 @@ class Datatable(object):
             'id': self.name,
             'cols': self.fields,
             'links': links,
+            'allow_html_export': self.allow_html_export
         }))
 
     def __repr__(self):
@@ -422,7 +495,6 @@ class TestDatatable(amcattest.AmCATTestCase):
         from amcat.models import Project
 
         d = Datatable(ProjectResource)
-
         self.assertEqual(set(d.fields), TestDatatable.PROJECT_FIELDS)
 
         # Test order of fields.
@@ -501,8 +573,8 @@ class TestDatatable(amcattest.AmCATTestCase):
 
         d = Datatable(ProjectResource).order_by("name")
         self.assertTrue("name" in unicode(d))
-        self.assertTrue("['name', 'asc']" in unicode(d))
-        self.assertTrue("['name', 'desc']" in unicode(d.order_by("-name")))
+        self.assertTrue('["name", "asc"]' in unicode(d))
+        self.assertTrue('["name", "desc"]' in unicode(d.order_by("-name")))
 
         with self.assertRaises(ValueError):
             d.order_by("bla")
@@ -510,3 +582,14 @@ class TestDatatable(amcattest.AmCATTestCase):
         with self.assertRaises(ValueError):
             d.order_by("?name")
 
+    def test_search(self):
+        from api.rest.resources import ProjectResource
+        from api.rest.viewsets import ArticleSetViewSet
+
+        # Resources are not searchable (yet?)
+        d = Datatable(ProjectResource)
+        self.assertIn('"searching": false', unicode(d))
+
+        # Articleset viewsets are searchable
+        d = Datatable(ArticleSetViewSet, url_kwargs={"project": 1})
+        self.assertIn('"searching": true', unicode(d))

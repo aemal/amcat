@@ -78,6 +78,7 @@ class _NoProjectRequestedError(ValueError): pass
 class ArticleSetViewSetMixin(AmCATViewSetMixin):
     model_key = "articleset"
     model = ArticleSet
+    search_fields = ordering_fields = ("id", "name", "provenance")
 
 class ArticleSetViewSet(ProjectViewSetMixin, ArticleSetViewSetMixin, DatatablesMixin, ModelViewSet):
     model_serializer_class = ArticleSetSerializer
@@ -90,12 +91,14 @@ class ArticleSetViewSet(ProjectViewSetMixin, ArticleSetViewSetMixin, DatatablesM
 class FavouriteArticleSetViewSetMixin(AmCATViewSetMixin):
     model_key = "favourite_articleset"
     base_name = "favourite_articleset"
+    search_fields = ordering_fields = ("id", "name", "provenance")
     model = ArticleSet
 
 class FavouriteArticleSetViewSet(ProjectViewSetMixin, FavouriteArticleSetViewSetMixin, DatatablesMixin, ReadOnlyModelViewSet):
     model_serializer_class = ArticleSetSerializer
     model_key = "favourite_articleset"
     model = ArticleSet
+
 
     def filter_queryset(self, queryset):
         queryset = super(FavouriteArticleSetViewSet, self).filter_queryset(queryset)
@@ -107,6 +110,7 @@ class FavouriteArticleSetViewSet(ProjectViewSetMixin, FavouriteArticleSetViewSet
 class CodingjobArticleSetViewSetMixin(AmCATViewSetMixin):
     model_key = "codingjob_articleset"
     base_name = "codingjob_articleset"
+    search_fields = ordering_fields = ("id", "name", "provenance")
     model = ArticleSet
 
 
