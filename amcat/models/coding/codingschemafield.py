@@ -37,6 +37,14 @@ from django.db import models
 import logging; log = logging.getLogger(__name__)
 
 
+class FIELDTYPE_IDS:
+    TEXT = 1
+    INT = 2
+    CODEBOOK = 5
+    BOOLEAN = 7
+    QUALITY = 9
+
+
 class CodingSchemaFieldType(AmcatModel):
     """
     Model for codingschemas_fieldtypes
