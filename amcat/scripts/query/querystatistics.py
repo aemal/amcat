@@ -17,16 +17,22 @@
 # License along with AmCAT.  If not, see <http://www.gnu.org/licenses/>.  #
 ###########################################################################
 import json
+import logging
+
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Q
-from amcat.models import CodingValue, FIELDTYPE_IDS, Code
+from amcat.models import CodingValue, Code
 from amcat.scripts.query import QueryAction
 from amcat.tools.keywordsearch import SelectionSearch
+
+from amcat.models.coding.codingschemafield import FIELDTYPE_IDS
+
+log = logging.getLogger(__name__)
 
 
 def get_used_codes(codingjobs):
     if not codingjobs:
-        return []
+        return Code.objects.none()
 
     codingjob_ids = [c.id for c in codingjobs]
     codingjob_filter = Q(coding__coded_article__codingjob__id__in=codingjob_ids)
